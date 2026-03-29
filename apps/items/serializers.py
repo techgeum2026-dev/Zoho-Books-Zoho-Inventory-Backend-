@@ -19,27 +19,44 @@ class ItemWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Item
         fields = [
-            'name', 'item_type', 'unit', 'image', 'hsn_code',
-            'tax_preference', 'selling_price', 'selling_account',
+            'uid', 'name', 'item_type', 'unit', 'image', 'hsn_code',
+            'tax_preference', 'sku', 'item_description', 'selling_price', 'selling_account',
             'selling_description', 'cost_price', 'purchase_account',
             'purchase_description', 'intra_state_tax_rate', 'inter_state_tax_rate',
+            'track_inventory', 'inventory_account', 'inventory_valuation_method', 'reorder_point', 
         ]
 
     def validate(self, attrs):
         """
-        Cross-field validation.
-
-        Raises a ValidationError if selling_price is set and is lower than
-        cost_price.
+        Cross-field validation for selling/cost price and inventory fields.
         """
+        errors = {}
+
+        # 1. Selling price vs cost price validation
         selling_price = attrs.get('selling_price')
         cost_price = attrs.get('cost_price')
+        if selling_price is not None and cost_price is not None and selling_price < cost_price:
+            errors["selling_price"] = "Selling price cannot be less than cost price."
 
-        if selling_price is not None and cost_price is not None:
-            if selling_price < cost_price:
-                raise serializers.ValidationError(
-                    {"selling_price": "Selling price cannot be less than cost price."}
-                )
+        # 2. Inventory tracking validation
+        track_inventory = attrs.get('track_inventory', False)
+        inv_account = attrs.get('inventory_account')
+        inv_method = attrs.get('inventory_valuation_method')
+
+        if track_inventory:
+            if not inv_account:
+                errors["inventory_account"] = "This field is required when tracking inventory is enabled."
+            if not inv_method:
+                errors["inventory_valuation_method"] = "This field is required when tracking inventory is enabled."
+        else:
+            if inv_account:
+                errors["inventory_account"] = "Must be empty when tracking inventory is disabled."
+            if inv_method:
+                errors["inventory_valuation_method"] = "Must be empty when tracking inventory is disabled."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
         return attrs
 
 
@@ -59,10 +76,11 @@ class ItemDetailSerializer(serializers.ModelSerializer):
         model = Item
         fields = [
             'uid', 'name', 'item_type', 'item_type_display', 'unit', 'image',
-            'hsn_code', 'tax_preference', 'tax_preference_display',
+            'hsn_code', 'tax_preference', 'tax_preference_display', 'sku', 'item_description',
             'selling_price', 'selling_account', 'selling_account_display',
             'selling_description', 'cost_price', 'purchase_account',
             'purchase_account_display', 'purchase_description',
             'intra_state_tax_rate', 'inter_state_tax_rate',
+            'track_inventory', 'inventory_account', 'inventory_valuation_method', 'reorder_point',
             'is_active', 'created_at', 'updated_at',
         ]
