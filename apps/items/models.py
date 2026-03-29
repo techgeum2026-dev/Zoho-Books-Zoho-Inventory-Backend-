@@ -8,12 +8,18 @@ import uuid
 from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
 
 # Validator for HSN/SAC code – exactly 6 digits
 hsn_code_validator = RegexValidator(
     regex=r'^\d{6}$',
     message=_('HSN/SAC code must be exactly 6 numeric digits (e.g., 010101).')
 )
+
+sku_validator = RegexValidator(
+        regex=r'^[A-Za-z0-9]{1,12}$',
+        message=_('SKU must be alphanumeric and up to 12 characters (no symbols).')
+    )
 
 
 class Item(models.Model):
@@ -52,6 +58,19 @@ class Item(models.Model):
         PURCHASE_RETURN = 'PURCHASE_RETURN', _('Purchase Return')
         FREIGHT = 'FREIGHT', _('Freight')
         OTHER_EXPENSE = 'OTHER_EXPENSE', _('Other Expense')
+        
+    class InventoryValuationMethod(models.TextChoices):
+        """Method used to value inventory."""
+        FIFO = 'FIFO', _('FIFO (First-In-First-Out)')
+        LIFO = 'LIFO', _('LIFO (Last-In-First-Out)')
+        WEIGHTED_AVERAGE = 'WEIGHTED_AVERAGE', _('Weighted Average')
+
+    class InventoryAccount(models.TextChoices):
+        """Account head for inventory asset."""
+        INVENTORY = 'INVENTORY', _('Inventory Asset')
+        RAW_MATERIALS = 'RAW_MATERIALS', _('Raw Materials')
+        WORK_IN_PROGRESS = 'WORK_IN_PROGRESS', _('Work in Progress')
+        FINISHED_GOODS = 'FINISHED_GOODS', _('Finished Goods')
 
     # Basic Information
     uid = models.UUIDField(
@@ -84,6 +103,20 @@ class Item(models.Model):
         max_length=20,
         choices=TaxPreference.choices,
         default=TaxPreference.TAXABLE,
+    )
+    
+    sku = models.CharField(
+        max_length=12,
+        unique=True,
+        blank=True,
+        null=True,
+        validators=[sku_validator],
+        help_text=_('Stock Keeping Unit – unique identifier for the item.'),
+    )
+    item_description = models.TextField(
+        blank=True,
+        default='',
+        help_text=_('Detailed description of the item.'),
     )
 
     # Selling Information
@@ -133,6 +166,30 @@ class Item(models.Model):
         validators=[MinValueValidator(0)],
         help_text=_('IGST rate for inter-state supply (%)'),
     )
+    
+    track_inventory = models.BooleanField(
+        default=False,
+        help_text=_('Enable inventory tracking for this item.'),
+    )
+    inventory_account = models.CharField(
+        max_length=30,
+        choices=InventoryAccount.choices,
+        blank=True,
+        null=True,
+        help_text=_('Account head for inventory asset. Required when track_inventory is True.'),
+    )
+    inventory_valuation_method = models.CharField(
+        max_length=30,
+        choices=InventoryValuationMethod.choices,
+        blank=True,
+        null=True,
+        help_text=_('Method used to value inventory. Required when track_inventory is True.'),
+    )
+    reorder_point = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text=_('Minimum stock level that triggers a reorder (in base unit).'),
+    )
 
     # System Fields
     is_active = models.BooleanField(default=True, db_index=True)
@@ -150,6 +207,31 @@ class Item(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.get_item_type_display()})"
+    
+    def clean(self):
+        """
+        Enforce inventory-related business rules.
+        When tracking is disabled, clear the inventory fields automatically.
+        When tracking is enabled, require both fields.
+        """
+        if not self.track_inventory:
+            # Auto‑clear the fields – this ensures data consistency
+            self.inventory_account = None
+            self.inventory_valuation_method = None
+        else:
+            if not self.inventory_account:
+                raise ValidationError({
+                    'inventory_account': _('This field is required when tracking inventory.')
+                })
+            if not self.inventory_valuation_method:
+                raise ValidationError({
+                    'inventory_valuation_method': _('This field is required when tracking inventory.')
+                })
+                
+    def save(self, *args, **kwargs):
+        """Run full validation before saving."""
+        self.full_clean()  # calls clean() and field validators
+        super().save(*args, **kwargs)
 
     def mark_inactive(self) -> None:
         """Set the item as inactive and update timestamp."""
